@@ -49,7 +49,7 @@ chmod +x /usr/local/bin/v2ray-exporter
 1. Download release binary according to your system and architecture on [releases][github-releases] page.
 2. Place `v2ray-exporter` into `/usr/local/bin/`
 3. Run `chmod +x /usr/local/bin/v2ray-exporter`
-4. Create `/etc/systemd/systemd/exporter-v2ray.service` using following content:
+4. Create `/etc/systemd/system/exporter-v2ray.service` using following content:
     ```
     [Unit]
     Description=V2Ray exporter

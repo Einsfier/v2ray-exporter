@@ -11,6 +11,8 @@ import (
 
 	"github.com/v2fly/v2ray-core/v5/app/stats/command"
 
+	observatory_command "github.com/v2fly/v2ray-core/v5/app/observatory/command"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
@@ -24,6 +26,8 @@ type Exporter struct {
 	totalScrapes       prometheus.Counter
 	metricDescriptions map[string]*prometheus.Desc
 	conn               *grpc.ClientConn
+	statsClient        command.StatsServiceClient
+	observatoryClient  observatory_command.ObservatoryServiceClient
 }
 
 func NewExporter(endpoint string, scrapeTimeout time.Duration) (*Exporter, error) {
@@ -51,6 +55,12 @@ func NewExporter(endpoint string, scrapeTimeout time.Duration) (*Exporter, error
 		"traffic_uplink_bytes_total":   {txt: "Number of transmitted bytes", lbls: []string{"dimension", "target", "src"}},
 		"traffic_downlink_bytes_total": {txt: "Number of received bytes", lbls: []string{"dimension", "target", "src"}},
 		"connection_attempt_total":     {txt: "Number of connection attempts", lbls: []string{"dimension", "target", "src"}},
+
+		"observatory_alive":                         {txt: "Whether the outbound is alive (1=alive, 0=dead)", lbls: []string{"outbound"}},
+		"observatory_delay_seconds":                 {txt: "Last probe delay in seconds", lbls: []string{"outbound"}},
+		"observatory_health_ping_seconds":           {txt: "Health ping latency in seconds", lbls: []string{"outbound", "stat"}},
+		"observatory_health_ping_deviation_seconds": {txt: "Health ping latency standard deviation in seconds", lbls: []string{"outbound"}},
+		"observatory_health_ping_count":             {txt: "Health ping count", lbls: []string{"outbound", "result"}},
 	} {
 		e.metricDescriptions[k] = e.newMetricDescr(k, desc.txt, desc.lbls)
 	}
@@ -67,6 +77,8 @@ func NewExporter(endpoint string, scrapeTimeout time.Duration) (*Exporter, error
 	}
 
 	e.conn = conn
+	e.statsClient = command.NewStatsServiceClient(conn)
+	e.observatoryClient = observatory_command.NewObservatoryServiceClient(conn)
 
 	return &e, nil
 }
@@ -99,14 +111,16 @@ func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 }
 
 func (e *Exporter) scrapeV2Ray(ch chan<- prometheus.Metric) error {
-	client := command.NewStatsServiceClient(e.conn)
-
-	if err := e.scrapeV2RaySysMetrics(context.Background(), ch, client); err != nil {
+	if err := e.scrapeV2RaySysMetrics(context.Background(), ch, e.statsClient); err != nil {
 		return err
 	}
 
-	if err := e.scrapeV2RayMetrics(context.Background(), ch, client); err != nil {
+	if err := e.scrapeV2RayMetrics(context.Background(), ch, e.statsClient); err != nil {
 		return err
+	}
+
+	if err := e.scrapeObservatory(context.Background(), ch); err != nil {
+		logrus.Warnf("Observatory scrape failed (may not be enabled): %s", err)
 	}
 
 	return nil
@@ -163,6 +177,35 @@ func (e *Exporter) scrapeV2RaySysMetrics(ctx context.Context, ch chan<- promethe
 	// Therefore, we only add the "memstats_" prefix without changing their original names.
 	e.registerConstMetricGauge(ch, "memstats_num_gc", float64(resp.GetNumGC()))
 	e.registerConstMetricGauge(ch, "memstats_pause_total_ns", float64(resp.GetPauseTotalNs()))
+
+	return nil
+}
+
+func (e *Exporter) scrapeObservatory(ctx context.Context, ch chan<- prometheus.Metric) error {
+	resp, err := e.observatoryClient.GetOutboundStatus(ctx, &observatory_command.GetOutboundStatusRequest{})
+	if err != nil {
+		return fmt.Errorf("failed to get observatory status: %w", err)
+	}
+
+	for _, s := range resp.GetStatus().GetStatus() {
+		tag := s.GetOutboundTag()
+
+		var alive float64
+		if s.GetAlive() {
+			alive = 1
+		}
+		e.registerConstMetricGauge(ch, "observatory_alive", alive, tag)
+		e.registerConstMetricGauge(ch, "observatory_delay_seconds", float64(s.GetDelay())/1000, tag)
+
+		if hp := s.GetHealthPing(); hp != nil {
+			e.registerConstMetricGauge(ch, "observatory_health_ping_seconds", float64(hp.GetAverage())/1000, tag, "avg")
+			e.registerConstMetricGauge(ch, "observatory_health_ping_seconds", float64(hp.GetMax())/1000, tag, "max")
+			e.registerConstMetricGauge(ch, "observatory_health_ping_seconds", float64(hp.GetMin())/1000, tag, "min")
+			e.registerConstMetricGauge(ch, "observatory_health_ping_deviation_seconds", float64(hp.GetDeviation())/1000, tag)
+			e.registerConstMetricCounter(ch, "observatory_health_ping_count", float64(hp.GetAll()), tag, "total")
+			e.registerConstMetricCounter(ch, "observatory_health_ping_count", float64(hp.GetFail()), tag, "fail")
+		}
+	}
 
 	return nil
 }

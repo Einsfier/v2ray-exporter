@@ -198,10 +198,10 @@ func (e *Exporter) scrapeObservatory(ctx context.Context, ch chan<- prometheus.M
 		e.registerConstMetricGauge(ch, "observatory_delay_seconds", float64(s.GetDelay())/1000, tag)
 
 		if hp := s.GetHealthPing(); hp != nil {
-			e.registerConstMetricGauge(ch, "observatory_health_ping_seconds", float64(hp.GetAverage())/1000, tag, "avg")
-			e.registerConstMetricGauge(ch, "observatory_health_ping_seconds", float64(hp.GetMax())/1000, tag, "max")
-			e.registerConstMetricGauge(ch, "observatory_health_ping_seconds", float64(hp.GetMin())/1000, tag, "min")
-			e.registerConstMetricGauge(ch, "observatory_health_ping_deviation_seconds", float64(hp.GetDeviation())/1000, tag)
+			e.registerConstMetricGauge(ch, "observatory_health_ping_seconds", time.Duration(hp.GetAverage()).Seconds(), tag, "avg")
+			e.registerConstMetricGauge(ch, "observatory_health_ping_seconds", time.Duration(hp.GetMax()).Seconds(), tag, "max")
+			e.registerConstMetricGauge(ch, "observatory_health_ping_seconds", time.Duration(hp.GetMin()).Seconds(), tag, "min")
+			e.registerConstMetricGauge(ch, "observatory_health_ping_deviation_seconds", time.Duration(hp.GetDeviation()).Seconds(), tag)
 			e.registerConstMetricCounter(ch, "observatory_health_ping_count", float64(hp.GetAll()), tag, "total")
 			e.registerConstMetricCounter(ch, "observatory_health_ping_count", float64(hp.GetFail()), tag, "fail")
 		}
